@@ -13,6 +13,13 @@ android {
         targetSdk = 34
         versionCode = (System.getenv("GITHUB_RUN_NUMBER") ?: "1").toInt()
         versionName = "1.0." + (System.getenv("GITHUB_RUN_NUMBER") ?: "0")
+        // Clé TMDB (films et séries en français) : secret GitHub TMDB_KEY, jamais écrite dans le code
+        val tmdb = (System.getenv("TMDB_KEY") ?: "").trim().replace("\"", "")
+        buildConfigField("String", "TMDB_KEY", "\"$tmdb\"")
+    }
+
+    buildFeatures {
+        buildConfig = true
     }
 
     // Clé de signature : chaque nouvelle version s'installe par-dessus l'ancienne.
