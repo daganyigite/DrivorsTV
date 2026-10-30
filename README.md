@@ -14,3 +14,8 @@ Chaque envoi de code sur GitHub fabrique automatiquement `DrivorsTV.apk` (onglet
 
 Dans l'app Downloader de la télé :
 `github.com/daganyigite/DrivorsTV/releases/latest/download/DrivorsTV.apk`
+
+## Sécurité
+
+Les versions publiées sont signées avec une clé privée rangée dans les secrets GitHub du dépôt
+(KEYSTORE_B64, KEYSTORE_PASSWORD). La clé TMDB est aussi un secret (TMDB_KEY).
