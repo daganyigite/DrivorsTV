@@ -453,7 +453,8 @@ class MainActivity : Activity() {
         }
         list.addView(updateItem)
         list.addView(TextView(this).apply {
-            text = "Drivors TV v" + Updater.currentName(this@MainActivity)
+            text = "Drivors TV v" + Updater.currentName(this@MainActivity) +
+                "\nFilms et séries : TMDB · Actualités : RFI, France 24"
             setTextColor(muted); textSize = 12f
             setPadding(dp(14), dp(10), 0, 0)
         })
