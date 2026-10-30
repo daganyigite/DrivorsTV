@@ -12,7 +12,7 @@ import java.util.concurrent.Executors
 
 /** Téléchargements simples (https uniquement). */
 object Net {
-    fun get(url: String, maxBytes: Int = 15_000_000): ByteArray {
+    fun get(url: String, maxBytes: Int = 15_000_000, headers: Map<String, String> = emptyMap()): ByteArray {
         var current = url
         repeat(5) {
             val c = URL(current).openConnection() as HttpURLConnection
@@ -21,6 +21,7 @@ object Net {
             c.instanceFollowRedirects = false
             c.setRequestProperty("User-Agent", "DrivorsTV")
             c.setRequestProperty("Accept-Language", "fr-FR,fr;q=0.9")
+            for ((k, v) in headers) c.setRequestProperty(k, v)
             val code = c.responseCode
             if (code in 300..399) {
                 val loc = c.getHeaderField("Location")

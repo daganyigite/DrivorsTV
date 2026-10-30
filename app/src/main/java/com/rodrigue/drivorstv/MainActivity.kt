@@ -13,6 +13,8 @@ import android.graphics.Typeface
 import android.graphics.drawable.Drawable
 import android.graphics.drawable.GradientDrawable
 import android.net.Uri
+import android.graphics.drawable.AdaptiveIconDrawable
+import android.os.Build
 import android.os.Bundle
 import android.os.Handler
 import android.os.Looper
@@ -76,8 +78,12 @@ class MainActivity : Activity() {
     private lateinit var appsGrid: GridLayout
     private lateinit var newsPage: LinearLayout
     private lateinit var newsChips: LinearLayout
-    private lateinit var newsList: LinearLayout
+    private lateinit var newsList: GridLayout
     private lateinit var selectionRow: LinearLayout
+    private lateinit var filmsRow: LinearLayout
+    private lateinit var seriesRow: LinearLayout
+    private lateinit var filmsTitle: TextView
+    private lateinit var seriesTitle: TextView
     private lateinit var myAppsRow: LinearLayout
     private lateinit var heroSource: TextView
     private lateinit var heroTitle: TextView
@@ -108,7 +114,24 @@ class MainActivity : Activity() {
         super.onCreate(savedInstanceState)
         prefs = getSharedPreferences("drivors", MODE_PRIVATE)
         setContentView(buildScreen())
+        fullScreen()
         checkUpdate(manual = false)
+    }
+
+    /** Toute la surface de l'écran, sans barre système. */
+    @Suppress("DEPRECATION")
+    private fun fullScreen() {
+        window.decorView.systemUiVisibility = (View.SYSTEM_UI_FLAG_FULLSCREEN
+            or View.SYSTEM_UI_FLAG_HIDE_NAVIGATION
+            or View.SYSTEM_UI_FLAG_IMMERSIVE_STICKY
+            or View.SYSTEM_UI_FLAG_LAYOUT_FULLSCREEN
+            or View.SYSTEM_UI_FLAG_LAYOUT_HIDE_NAVIGATION
+            or View.SYSTEM_UI_FLAG_LAYOUT_STABLE)
+    }
+
+    override fun onWindowFocusChanged(hasFocus: Boolean) {
+        super.onWindowFocusChanged(hasFocus)
+        if (hasFocus) fullScreen()
     }
 
     override fun onResume() {
@@ -170,10 +193,18 @@ class MainActivity : Activity() {
             orientation = LinearLayout.HORIZONTAL
             gravity = Gravity.CENTER_VERTICAL
         }
+        filmsRow = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
+        seriesRow = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
+        filmsTitle = rowTitle("Films du moment").apply { setPadding(0, dp(14), 0, dp(8)); visibility = View.GONE }
+        seriesTitle = rowTitle("Séries du moment").apply { setPadding(0, dp(14), 0, dp(8)); visibility = View.GONE }
         homeRows.addView(rowTitle("Sélection pour toi"))
         homeRows.addView(hScroll(selectionRow))
         homeRows.addView(rowTitle("Mes applis").apply { setPadding(0, dp(14), 0, dp(8)) })
         homeRows.addView(hScroll(myAppsRow))
+        homeRows.addView(filmsTitle)
+        homeRows.addView(hScroll(filmsRow))
+        homeRows.addView(seriesTitle)
+        homeRows.addView(hScroll(seriesRow))
         column.addView(homeRows)
 
         newsPage = buildNewsPage()
@@ -286,13 +317,13 @@ class MainActivity : Activity() {
         heroImage = ImageView(this).apply { scaleType = ImageView.ScaleType.CENTER_CROP }
         box.addView(heroImage, FrameLayout.LayoutParams(MATCH, MATCH))
 
-        // Voiles sombres pour que le texte reste lisible
+        // Voiles sombres légers : l'image couvre tout l'écran, le texte reste lisible
         box.addView(View(this).apply {
             background = GradientDrawable(
                 GradientDrawable.Orientation.LEFT_RIGHT,
-                intArrayOf(0xF20B0E14.toInt(), 0xA60B0E14.toInt(), 0x000B0E14)
+                intArrayOf(0xCC0B0E14.toInt(), 0x660B0E14, 0x000B0E14)
             )
-        }, FrameLayout.LayoutParams(dp(640), MATCH))
+        }, FrameLayout.LayoutParams(dp(520), MATCH))
         box.addView(View(this).apply {
             background = GradientDrawable(
                 GradientDrawable.Orientation.TOP_BOTTOM,
@@ -330,7 +361,7 @@ class MainActivity : Activity() {
             setPadding(dp(18), dp(7), dp(18), dp(7))
             background = rounded(fg, 99)
             isFocusable = true
-            setOnClickListener { featured.getOrNull(featuredIndex)?.let { openShow(it) } }
+            setOnClickListener { featured.getOrNull(featuredIndex)?.let { watchOrDetail(it) } }
             setOnKeyListener { _, code, ev ->
                 if (ev.action != KeyEvent.ACTION_DOWN || featured.size < 2) return@setOnKeyListener false
                 when (code) {
@@ -380,9 +411,9 @@ class MainActivity : Activity() {
             }, wrapParams(end = 8))
         }
         page.addView(newsChips)
-        newsList = LinearLayout(this).apply {
-            orientation = LinearLayout.VERTICAL
-            setPadding(0, dp(12), 0, 0)
+        newsList = GridLayout(this).apply {
+            columnCount = 3
+            setPadding(0, dp(16), 0, 0)
         }
         page.addView(newsList, LinearLayout.LayoutParams(MATCH, WRAP))
         styleChips()
@@ -486,7 +517,7 @@ class MainActivity : Activity() {
 
     private fun loadShows() {
         Thread {
-            val list = try { Content.loadShows() } catch (_: Exception) { emptyList() }
+            val list = try { Content.loadShows(BuildConfig.TMDB_KEY) } catch (_: Exception) { emptyList() }
             runOnUiThread {
                 if (list.isNotEmpty()) {
                     shows = list
@@ -502,11 +533,21 @@ class MainActivity : Activity() {
 
     private fun fillSelection() {
         selectionRow.removeAllViews()
+        filmsRow.removeAllViews()
+        seriesRow.removeAllViews()
         if (shows.isNotEmpty()) {
-            for (s in shows) selectionRow.addView(posterCard(s))
+            for (s in shows.take(20)) selectionRow.addView(posterCard(s))
+            val films = shows.filter { it.kind == "Film" }
+            val series = shows.filter { it.kind == "Série" && it.tmdbType.isNotEmpty() }
+            for (s in films) filmsRow.addView(posterCard(s))
+            for (s in series) seriesRow.addView(posterCard(s))
+            filmsTitle.visibility = if (films.isEmpty()) View.GONE else View.VISIBLE
+            seriesTitle.visibility = if (series.isEmpty()) View.GONE else View.VISIBLE
         } else {
             // Pas encore de films/séries (pas d'internet) : on montre les bannières des applis
             for (a in apps.filter { it.banner != null }) selectionRow.addView(bannerCard(a))
+            filmsTitle.visibility = View.GONE
+            seriesTitle.visibility = View.GONE
         }
     }
 
@@ -520,11 +561,10 @@ class MainActivity : Activity() {
             heroOpen.visibility = View.GONE
         } else {
             Images.load(s.backdrop ?: s.poster, heroImage, 1280)
-            heroSource.text = s.platform
+            heroSource.text = s.platform.ifEmpty { "Tendance" }
             heroTitle.text = s.name
-            val genre = s.genres.take(2).joinToString(" · ")
-            heroLine.text = listOf("Série", genre, s.summary).filter { it.isNotBlank() }.joinToString("  |  ")
-            heroOpen.text = "Regarder sur ${s.platform}"
+            heroLine.text = metaLine(s) + if (s.summary.isNotBlank()) "  |  " + s.summary else ""
+            heroOpen.text = if (s.platform.isNotEmpty()) "Regarder sur ${s.platform}" else "Plus d'infos"
             heroOpen.visibility = View.VISIBLE
         }
         dots.removeAllViews()
@@ -535,10 +575,71 @@ class MainActivity : Activity() {
         }
     }
 
+    private fun metaLine(s: Show) =
+        listOf(s.kind, s.year, s.genres.take(2).joinToString(" · ")).filter { it.isNotBlank() }.joinToString("  ·  ")
+
+    /** Ouvre l'appli de la plateforme. Renvoie false si elle n'est pas installée. */
+    private fun openPlatform(s: Show): Boolean {
+        if (s.platform == "Canal+") canalApp()?.let { launch(it); return true }
+        val pkgs = Content.platformApps[s.platform] ?: emptyList()
+        for (p in pkgs) if (openPackage(p)) return true
+        return false
+    }
+
+    /** Bouton de la grande bannière : regarder directement, sinon la fiche. */
+    private fun watchOrDetail(s: Show) {
+        if (s.platform.isEmpty() || !openPlatform(s)) openShow(s)
+    }
+
+    /** Fiche du film ou de la série. */
     private fun openShow(s: Show) {
-        val pkgs = Content.platformApps[s.platform] ?: Content.platformApps[s.platform.removePrefix("HBO ")] ?: emptyList()
-        for (p in pkgs) if (openPackage(p)) return
-        toast("L'appli ${s.platform} n'est pas installée sur la télé")
+        detail.removeAllViews()
+        val card = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            setPadding(dp(24), dp(24), dp(28), dp(24))
+            background = rounded(panel, 20)
+        }
+        val poster = ImageView(this).apply {
+            scaleType = ImageView.ScaleType.CENTER_CROP
+            background = rounded(Color.parseColor("#232F55"), 12)
+            clipToOutline = true
+        }
+        Images.load(s.poster, poster, 400)
+        card.addView(poster, LinearLayout.LayoutParams(dp(180), dp(270)).apply { marginEnd = dp(24) })
+        val col = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
+        col.addView(TextView(this).apply {
+            text = s.platform.ifEmpty { "Tendance" }
+            setTextColor(accent); textSize = 13f; typeface = Typeface.DEFAULT_BOLD
+        })
+        col.addView(TextView(this).apply {
+            text = s.name
+            setTextColor(fg); textSize = 26f; typeface = Typeface.DEFAULT_BOLD
+            setPadding(0, dp(4), 0, dp(4))
+        })
+        col.addView(TextView(this).apply { text = metaLine(s); setTextColor(muted); textSize = 14f })
+        col.addView(TextView(this).apply {
+            text = s.summary.ifBlank { "Pas de résumé disponible." }
+            setTextColor(fg); textSize = 15f
+            setLineSpacing(0f, 1.25f)
+            maxLines = 7; ellipsize = TextUtils.TruncateAt.END
+            setPadding(0, dp(12), 0, 0)
+        })
+        val buttons = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL; setPadding(0, dp(18), 0, 0) }
+        var first: View? = null
+        if (s.platform.isNotEmpty()) {
+            val watch = actionButton("Regarder sur ${s.platform}") {
+                if (!openPlatform(s)) toast("L'appli ${s.platform} n'est pas installée sur la télé")
+            }
+            buttons.addView(watch, wrapParams(end = 12)); first = watch
+        }
+        val close = actionButton("Fermer") { detail.visibility = View.GONE }
+        buttons.addView(close)
+        col.addView(buttons)
+        card.addView(col, LinearLayout.LayoutParams(0, WRAP, 1f))
+        detail.addView(card, FrameLayout.LayoutParams(dp(760), WRAP, Gravity.CENTER))
+        detail.visibility = View.VISIBLE
+        val f = first ?: close
+        f.post { f.requestFocus() }
     }
 
     // ---------------------------------------------------------------- actualités
@@ -568,45 +669,72 @@ class MainActivity : Activity() {
             ))
             return
         }
-        for (n in shown) newsList.addView(newsItem(n))
+        // 3 cartes par ligne, sur toute la largeur de l'écran
+        val screenDp = (resources.displayMetrics.widthPixels / resources.displayMetrics.density).toInt()
+        val w = (screenDp - 72 - 2 * 22) / 3
+        shown.forEachIndexed { i, n -> newsList.addView(newsCard(n, w, last = i % 3 == 2)) }
     }
 
-    private fun newsItem(n: News): View {
-        val row = LinearLayout(this).apply {
-            orientation = LinearLayout.HORIZONTAL
-            gravity = Gravity.CENTER_VERTICAL
-            setPadding(dp(10), dp(10), dp(14), dp(10))
-            background = rounded(panel, 14)
+    /** Carte d'article au format RFI : grande photo, rubrique, titre, source et heure. */
+    private fun newsCard(n: News, w: Int, last: Boolean): View {
+        val card = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
             isFocusable = true
             setOnClickListener { openNews(n) }
-            setOnFocusChangeListener { v, f ->
-                v.background = rounded(if (f) Color.parseColor("#2A3240") else panel, 14)
-                v.foreground = if (f) GradientDrawable().apply {
-                    cornerRadius = dp(14).toFloat(); setStroke(dp(2), accent)
-                } else null
-            }
         }
         val img = ImageView(this).apply {
             scaleType = ImageView.ScaleType.CENTER_CROP
-            background = rounded(Color.parseColor("#232F55"), 10)
+            background = rounded(Color.parseColor("#232F55"), 6)
             clipToOutline = true
         }
-        Images.load(n.image, img, 400)
-        row.addView(img, LinearLayout.LayoutParams(dp(150), dp(84)).apply { marginEnd = dp(14) })
-        val col = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
-        col.addView(TextView(this).apply {
+        Images.load(n.image, img, 700)
+        card.addView(img, LinearLayout.LayoutParams(MATCH, dp(w * 9 / 16)))
+
+        val tags = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+            setPadding(0, dp(12), 0, 0)
+        }
+        if (n.link.contains("podcast", ignoreCase = true)) {
+            tags.addView(TextView(this).apply {
+                text = "PODCAST"
+                setTextColor(Color.parseColor("#3A1820")); textSize = 11f; typeface = Typeface.DEFAULT_BOLD
+                letterSpacing = 0.04f
+                setPadding(dp(8), dp(3), dp(8), dp(3))
+                background = rounded(Color.parseColor("#F4C9D2"), 3)
+            }, wrapParams(end = 10))
+        }
+        tags.addView(TextView(this).apply {
+            text = (n.category.ifBlank { n.source }).uppercase()
+            setTextColor(muted); textSize = 12f
+            letterSpacing = 0.06f
+            maxLines = 1; ellipsize = TextUtils.TruncateAt.END
+        })
+        card.addView(tags)
+        card.addView(TextView(this).apply {
             text = n.title
-            setTextColor(fg); textSize = 16f; typeface = Typeface.DEFAULT_BOLD
-            maxLines = 2; ellipsize = TextUtils.TruncateAt.END
+            setTextColor(fg); textSize = 17f; typeface = Typeface.DEFAULT_BOLD
+            setLineSpacing(0f, 1.15f)
+            maxLines = 3; ellipsize = TextUtils.TruncateAt.END
+            setPadding(0, dp(8), 0, dp(8))
         })
-        col.addView(TextView(this).apply {
-            text = listOf(n.source, Content.ago(n.date)).filter { it.isNotBlank() }.joinToString("  ·  ")
-            setTextColor(accent); textSize = 12f
-            setPadding(0, dp(4), 0, 0)
+        card.addView(TextView(this).apply {
+            text = listOf(n.source, Content.ago(n.date)).filter { it.isNotBlank() }.joinToString("   |   ")
+            setTextColor(muted); textSize = 12f
         })
-        row.addView(col, LinearLayout.LayoutParams(0, WRAP, 1f))
-        row.layoutParams = LinearLayout.LayoutParams(MATCH, WRAP).apply { bottomMargin = dp(10) }
-        return row
+        card.setOnFocusChangeListener { v, f ->
+            v.animate().scaleX(if (f) 1.04f else 1f).scaleY(if (f) 1.04f else 1f).setDuration(120).start()
+            v.elevation = if (f) dp(8).toFloat() else 0f
+            img.foreground = if (f) GradientDrawable().apply {
+                cornerRadius = dp(6).toFloat(); setStroke(dp(3), accent)
+            } else null
+            v.background = if (f) rounded(Color.parseColor("#1A2030"), 8) else null
+        }
+        card.layoutParams = GridLayout.LayoutParams().apply {
+            width = dp(w)
+            setMargins(0, 0, if (last) 0 else dp(22), dp(28))
+        }
+        return card
     }
 
     /** Fiche de l'article, lisible directement sur la télé. */
@@ -680,6 +808,7 @@ class MainActivity : Activity() {
             setOnClickListener { openShow(s) }
         }
         Images.load(s.poster, card, 300)
+        card.contentDescription = s.name + if (s.platform.isNotEmpty()) " sur ${s.platform}" else ""
         focusEffect(card, ring = true, radius = 12)
         card.layoutParams = LinearLayout.LayoutParams(dp(98), dp(140)).apply { marginEnd = dp(12) }
         return card
@@ -702,17 +831,33 @@ class MainActivity : Activity() {
     }
 
     private fun roundApp(a: App, withLabel: Boolean): View {
+        // Pas de fond blanc : l'icône garde son propre fond, découpée en rond
         val circle = FrameLayout(this).apply {
-            background = oval(Color.WHITE, null)
+            background = oval(pill, null)
+            clipToOutline = true
             isFocusable = true
             contentDescription = a.label
             setOnClickListener { launch(a) }
             setOnLongClickListener { appInfo(a); true }
         }
-        circle.addView(ImageView(this).apply {
-            setImageDrawable(a.icon)
-            scaleType = ImageView.ScaleType.FIT_CENTER
-        }, FrameLayout.LayoutParams(dp(42), dp(42), Gravity.CENTER))
+        val adaptive = Build.VERSION.SDK_INT >= 26 && a.icon is AdaptiveIconDrawable
+        if (adaptive) {
+            // Icône moderne : son fond remplit tout le rond
+            val ai = a.icon as AdaptiveIconDrawable
+            val layers = listOfNotNull(ai.background, ai.foreground)
+            val full = android.graphics.drawable.LayerDrawable(layers.toTypedArray())
+            circle.addView(ImageView(this).apply {
+                setImageDrawable(full)
+                scaleType = ImageView.ScaleType.CENTER_CROP
+                scaleX = 1.45f; scaleY = 1.45f
+            }, FrameLayout.LayoutParams(MATCH, MATCH))
+        } else {
+            // Ancienne icône (souvent avec son propre fond déjà dessiné) : agrandie dans le rond
+            circle.addView(ImageView(this).apply {
+                setImageDrawable(a.icon)
+                scaleType = ImageView.ScaleType.FIT_CENTER
+            }, FrameLayout.LayoutParams(dp(62), dp(62), Gravity.CENTER))
+        }
         focusEffect(circle, ring = true, oval = true)
 
         if (!withLabel) {
