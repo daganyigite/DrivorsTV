@@ -54,6 +54,8 @@ jobs:
           gradle-version: "8.7"
 
       - name: Compiler l'application
+        env:
+          TMDB_KEY: ${{ secrets.TMDB_KEY }}
         run: gradle assembleRelease --no-daemon
 
       - name: Renommer l'apk
