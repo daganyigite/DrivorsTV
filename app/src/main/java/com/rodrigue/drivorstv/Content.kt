@@ -74,9 +74,12 @@ object Content {
                 )
             }
         }
-        val list = found.values.filter { it.poster != null }.sortedByDescending { it.weight }.take(24)
+        val sorted = found.values.filter { it.poster != null }.sortedByDescending { it.weight }.take(24)
+        // La grande bannière montre une série par plateforme (pas 5 fois la même)
+        val picks = (sorted.distinctBy { it.platform } + sorted).distinct().take(6)
+        val list = picks + (sorted - picks.toSet())
         // Grande image de fond pour les 6 premières
-        for (s in list.take(6)) {
+        for (s in picks) {
             try {
                 val imgs = JSONArray(String(Net.get("https://api.tvmaze.com/shows/${s.id}/images")))
                 var best: String? = null
