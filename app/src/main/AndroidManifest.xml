@@ -4,6 +4,11 @@
     <uses-feature android:name="android.software.leanback" android:required="false" />
     <uses-feature android:name="android.hardware.touchscreen" android:required="false" />
 
+    <!-- Films/séries, actualités et mises à jour -->
+    <uses-permission android:name="android.permission.INTERNET" />
+    <!-- Installer les nouvelles versions de Drivors TV depuis l'app -->
+    <uses-permission android:name="android.permission.REQUEST_INSTALL_PACKAGES" />
+
     <!-- Pour voir toutes les applis installées sur la télé -->
     <queries>
         <intent>
@@ -13,6 +18,10 @@
         <intent>
             <action android:name="android.intent.action.MAIN" />
             <category android:name="android.intent.category.LAUNCHER" />
+        </intent>
+        <intent>
+            <action android:name="android.intent.action.VIEW" />
+            <data android:scheme="https" />
         </intent>
     </queries>
 
@@ -46,5 +55,7 @@
                 <category android:name="android.intent.category.DEFAULT" />
             </intent-filter>
         </activity>
+
+        <receiver android:name=".InstallReceiver" android:exported="false" />
     </application>
 </manifest>
