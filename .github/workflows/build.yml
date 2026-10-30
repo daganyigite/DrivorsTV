@@ -1,0 +1,74 @@
+name: Construire l'apk
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Récupérer le code
+        uses: actions/checkout@v4
+
+      - name: Installer Java 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+
+      - name: Créer la clé de signature (seulement la première fois)
+        run: |
+          if [ ! -f app/drivorstv.keystore ]; then
+            keytool -genkeypair -keystore app/drivorstv.keystore -alias drivorstv \
+              -storepass drivorstv -keypass drivorstv -keyalg RSA -keysize 2048 \
+              -validity 10000 -dname "CN=DrivorsTV, O=Perso, C=CI"
+            git config user.name "github-actions"
+            git config user.email "github-actions@users.noreply.github.com"
+            git add app/drivorstv.keystore
+            git commit -m "Clé de signature de l'app [skip ci]"
+            git push
+          fi
+
+      - name: Clé de signature privée (si elle est configurée dans les secrets)
+        env:
+          KS: ${{ secrets.KEYSTORE_B64 }}
+          KP: ${{ secrets.KEYSTORE_PASSWORD }}
+        run: |
+          if [ -n "$KS" ] && [ -n "$KP" ]; then
+            echo "$KS" | base64 -d > "$RUNNER_TEMP/release.keystore"
+            echo "SIGNING_STORE_FILE=$RUNNER_TEMP/release.keystore" >> "$GITHUB_ENV"
+            echo "SIGNING_STORE_PASSWORD=$KP" >> "$GITHUB_ENV"
+            echo "Signature avec la clé privée."
+          else
+            echo "Pas de clé privée configurée : clé du dépôt utilisée."
+          fi
+
+      - name: Installer Gradle
+        uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: "8.7"
+
+      - name: Compiler l'application
+        run: gradle assembleRelease --no-daemon
+
+      - name: Renommer l'apk
+        run: cp app/build/outputs/apk/release/app-release.apk DrivorsTV.apk
+
+      - name: Garder l'apk dans les résultats du build
+        uses: actions/upload-artifact@v4
+        with:
+          name: DrivorsTV
+          path: DrivorsTV.apk
+
+      - name: Publier une version téléchargeable
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: v1.0.${{ github.run_number }}
+          name: Drivors TV v1.0.${{ github.run_number }}
+          files: DrivorsTV.apk
+          make_latest: true
