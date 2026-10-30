@@ -250,6 +250,50 @@ object Content {
         SimpleDateFormat("EEE, dd MMM yyyy HH:mm:ss Z", Locale.ENGLISH).parse(s.trim())
     } catch (_: Exception) { null }
 
+    // ------------------------------------------------------------ Copie locale (démarrage instantané)
+
+    fun showsToJson(l: List<Show>): String = JSONArray().apply {
+        for (s in l) put(JSONObject()
+            .put("id", s.id).put("name", s.name).put("platform", s.platform)
+            .put("poster", s.poster ?: "").put("genres", JSONArray(s.genres))
+            .put("summary", s.summary).put("weight", s.weight).put("backdrop", s.backdrop ?: "")
+            .put("kind", s.kind).put("year", s.year).put("type", s.tmdbType))
+    }.toString()
+
+    fun showsFromJson(t: String): List<Show> = try {
+        val a = JSONArray(t)
+        (0 until a.length()).map { i ->
+            val o = a.getJSONObject(i)
+            val g = o.optJSONArray("genres")
+            Show(
+                id = o.optInt("id"), name = o.optString("name"), platform = o.optString("platform"),
+                poster = o.optString("poster").ifEmpty { null },
+                genres = (0 until (g?.length() ?: 0)).map { g!!.optString(it) },
+                summary = o.optString("summary"), weight = o.optInt("weight"),
+                backdrop = o.optString("backdrop").ifEmpty { null },
+                kind = o.optString("kind", "Série"), year = o.optString("year"), tmdbType = o.optString("type")
+            )
+        }
+    } catch (_: Exception) { emptyList() }
+
+    fun newsToJson(l: List<News>): String = JSONArray().apply {
+        for (n in l) put(JSONObject()
+            .put("source", n.source).put("title", n.title).put("link", n.link).put("summary", n.summary)
+            .put("image", n.image ?: "").put("date", n.date?.time ?: 0L).put("category", n.category))
+    }.toString()
+
+    fun newsFromJson(t: String): List<News> = try {
+        val a = JSONArray(t)
+        (0 until a.length()).map { i ->
+            val o = a.getJSONObject(i)
+            val d = o.optLong("date")
+            News(
+                o.optString("source"), o.optString("title"), o.optString("link"), o.optString("summary"),
+                o.optString("image").ifEmpty { null }, if (d > 0) Date(d) else null, o.optString("category")
+            )
+        }
+    } catch (_: Exception) { emptyList() }
+
     @Suppress("DEPRECATION")
     fun clean(html: String): String =
         Html.fromHtml(html).toString().replace(Regex("\\s+"), " ").trim()

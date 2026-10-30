@@ -71,6 +71,8 @@ class MainActivity : Activity() {
     private var pendingUpdate: Updater.Release? = null
 
     private lateinit var scroll: ScrollView
+    private lateinit var column: LinearLayout
+    private lateinit var topBar: View
     private lateinit var heroBox: FrameLayout
     private lateinit var heroImage: ImageView
     private lateinit var homeRows: LinearLayout
@@ -113,9 +115,125 @@ class MainActivity : Activity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         prefs = getSharedPreferences("drivors", MODE_PRIVATE)
+        Images.init(this)
         setContentView(buildScreen())
         fullScreen()
+
+        // Défilement « par rangée » (comme MusiqueTV) : la rangée choisie se cale sous la barre
+        window.decorView.viewTreeObserver.addOnGlobalFocusChangeListener { _, now -> now?.let { snapScroll(it) } }
+
+        // Les rangées d'applis ne sont reconstruites que si une appli est installée ou supprimée
+        val f = android.content.IntentFilter().apply {
+            addAction(Intent.ACTION_PACKAGE_ADDED)
+            addAction(Intent.ACTION_PACKAGE_REMOVED)
+            addAction(Intent.ACTION_PACKAGE_CHANGED)
+            addDataScheme("package")
+        }
+        registerReceiver(packageWatcher, f)
+
+        // Affichage instantané : dernière copie enregistrée sur la télé
+        restoreCache()
         checkUpdate(manual = false)
+        handler.postDelayed(newsTimer, NEWS_EVERY)
+    }
+
+    override fun onDestroy() {
+        super.onDestroy()
+        try { unregisterReceiver(packageWatcher) } catch (_: Exception) {}
+        handler.removeCallbacksAndMessages(null)
+    }
+
+    private var appsDirty = true
+    private val packageWatcher = object : android.content.BroadcastReceiver() {
+        override fun onReceive(c: android.content.Context, i: Intent) {
+            appsDirty = true
+            if (hasWindowFocus()) { appsDirty = false; refreshApps() }
+        }
+    }
+
+    /** Actualités rafraîchies toutes les 20 minutes, sans casser la sélection en cours. */
+    private val newsTimer = object : Runnable {
+        override fun run() {
+            Thread {
+                val list = try { Content.loadNews() } catch (_: Exception) { emptyList() }
+                runOnUiThread {
+                    if (list.isNotEmpty()) {
+                        news = list; newsLoadedAt = System.currentTimeMillis(); saveNews()
+                        if (currentTab == TAB_NEWS && newsList.findFocus() == null) showNews()
+                    }
+                }
+            }.start()
+            handler.postDelayed(this, NEWS_EVERY)
+        }
+    }
+
+    // ---------------------------------------------------------------- copie locale (démarrage instantané)
+
+    private fun restoreCache() {
+        try {
+            val f = java.io.File(filesDir, "shows.json")
+            if (f.exists()) {
+                val l = Content.showsFromJson(f.readText())
+                if (l.isNotEmpty()) {
+                    shows = l; featured = l.take(6); featuredIndex = 0
+                    showsLoadedAt = prefs.getLong("shows_at", 0L)
+                    fillSelection(); showFeatured()
+                }
+            }
+            val n = java.io.File(filesDir, "news.json")
+            if (n.exists()) {
+                news = Content.newsFromJson(n.readText())
+                newsLoadedAt = prefs.getLong("news_at", 0L)
+            }
+        } catch (_: Exception) {}
+    }
+
+    private fun saveShows() {
+        try {
+            java.io.File(filesDir, "shows.json").writeText(Content.showsToJson(shows))
+            prefs.edit().putLong("shows_at", showsLoadedAt).apply()
+        } catch (_: Exception) {}
+    }
+
+    private fun saveNews() {
+        try {
+            java.io.File(filesDir, "news.json").writeText(Content.newsToJson(news))
+            prefs.edit().putLong("news_at", newsLoadedAt).apply()
+        } catch (_: Exception) {}
+    }
+
+    // ---------------------------------------------------------------- défilement par rangée
+
+    private fun isIn(v: View, ancestor: View): Boolean {
+        var p: Any? = v
+        while (p is View) { if (p === ancestor) return true; p = p.parent }
+        return false
+    }
+
+    private fun topIn(v: View, ancestor: View): Int {
+        var y = 0
+        var c: View = v
+        while (c !== ancestor) { y += c.top; c = c.parent as? View ?: break }
+        return y
+    }
+
+    private fun snapScroll(v: View) {
+        if (isIn(v, topBar)) { scroll.smoothScrollTo(0, 0); return }
+        if (!isIn(v, column)) return
+        if (isIn(v, heroBox) || isIn(v, newsChips)) { scroll.smoothScrollTo(0, 0); return }
+        val container: ViewGroup = listOf<ViewGroup>(homeRows, newsList, appsGrid).firstOrNull { isIn(v, it) } ?: return
+        var c: View = v
+        while (c.parent !== container) c = c.parent as? View ?: return
+        // Dans l'accueil, on cale le titre de la rangée (juste au-dessus)
+        var anchor = c
+        if (container === homeRows) {
+            val i = homeRows.indexOfChild(c)
+            if (i > 0) anchor = homeRows.getChildAt(i - 1)
+        }
+        val first = container.getChildAt(0) ?: return
+        val top = topIn(anchor, column)
+        val target = if (top <= topIn(first, column) + dp(4)) 0 else top - dp(78)
+        scroll.smoothScrollTo(0, maxOf(0, target))
     }
 
     /** Toute la surface de l'écran, sans barre système. */
@@ -136,8 +254,10 @@ class MainActivity : Activity() {
 
     override fun onResume() {
         super.onResume()
-        refreshApps()
+        if (appsDirty) { appsDirty = false; refreshApps() }
         if (System.currentTimeMillis() - showsLoadedAt > 3 * 3600_000L) loadShows()
+        // Recherche de mise à jour une fois par jour (pas seulement au démarrage)
+        if (System.currentTimeMillis() - prefs.getLong("update_at", 0L) > 12 * 3600_000L) checkUpdate(manual = false)
         handler.removeCallbacks(rotate)
         handler.postDelayed(rotate, 9000)
     }
@@ -173,12 +293,16 @@ class MainActivity : Activity() {
     private fun buildScreen(): View {
         val root = FrameLayout(this).apply { setBackgroundColor(bg) }
 
-        scroll = ScrollView(this).apply {
+        // Le défilement automatique d'Android est coupé : c'est snapScroll() qui décide
+        scroll = object : ScrollView(this) {
+            override fun computeScrollDeltaToGetChildRectOnScreen(rect: android.graphics.Rect?): Int = 0
+        }.apply {
             isFillViewport = true
             isVerticalScrollBarEnabled = false
             isFocusable = false
+            clipChildren = false
         }
-        val column = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
+        column = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL; clipChildren = false }
         scroll.addView(column)
 
         heroBox = buildHero()
@@ -186,7 +310,9 @@ class MainActivity : Activity() {
 
         homeRows = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
-            setPadding(dp(36), 0, dp(36), dp(28))
+            setPadding(dp(36), 0, dp(36), dp(200))
+            clipChildren = false
+            clipToPadding = false
         }
         selectionRow = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
         myAppsRow = LinearLayout(this).apply {
@@ -212,7 +338,8 @@ class MainActivity : Activity() {
 
         appsPage = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
-            setPadding(dp(36), dp(84), dp(36), dp(28))
+            setPadding(dp(36), dp(84), dp(36), dp(200))
+            clipChildren = false; clipToPadding = false
             visibility = View.GONE
         }
         appsPage.addView(rowTitle("Toutes les applis"))
@@ -221,7 +348,20 @@ class MainActivity : Activity() {
         column.addView(appsPage)
 
         root.addView(scroll, FrameLayout.LayoutParams(MATCH, MATCH))
-        root.addView(buildTopBar(), FrameLayout.LayoutParams(MATCH, WRAP))
+
+        // Voile sous la barre : le contenu qui remonte s'efface au lieu de passer dans la barre
+        val scrim = View(this).apply {
+            background = GradientDrawable(
+                GradientDrawable.Orientation.TOP_BOTTOM,
+                intArrayOf(0xF20B0E14.toInt(), 0xB30B0E14.toInt(), 0x000B0E14)
+            )
+            alpha = 0f
+        }
+        root.addView(scrim, FrameLayout.LayoutParams(MATCH, dp(118)))
+        scroll.setOnScrollChangeListener { _, _, y, _, _ -> scrim.alpha = (y / dp(60).toFloat()).coerceIn(0f, 1f) }
+
+        topBar = buildTopBar()
+        root.addView(topBar, FrameLayout.LayoutParams(MATCH, WRAP))
 
         quickPanel = buildQuickPanel()
         root.addView(quickPanel, FrameLayout.LayoutParams(dp(300), MATCH, Gravity.END))
@@ -249,7 +389,7 @@ class MainActivity : Activity() {
             textSize = 13f
             typeface = Typeface.DEFAULT_BOLD
             gravity = Gravity.CENTER
-            background = oval(Color.parseColor("#2A3240"), Color.parseColor("#3A4556"))
+            background = glass(oval = true)
         }, LinearLayout.LayoutParams(dp(33), dp(33)).apply { marginEnd = dp(10) })
 
         // Pilule : Rechercher, Accueil, Canal+, News, Applis
@@ -388,7 +528,8 @@ class MainActivity : Activity() {
     private fun buildNewsPage(): LinearLayout {
         val page = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
-            setPadding(dp(36), dp(80), dp(36), dp(28))
+            setPadding(dp(36), dp(80), dp(36), dp(200))
+            clipChildren = false; clipToPadding = false
             visibility = View.GONE
         }
         page.addView(TextView(this).apply {
@@ -414,6 +555,7 @@ class MainActivity : Activity() {
         newsList = GridLayout(this).apply {
             columnCount = 3
             setPadding(0, dp(16), 0, 0)
+            clipChildren = false; clipToPadding = false
         }
         page.addView(newsList, LinearLayout.LayoutParams(MATCH, WRAP))
         styleChips()
@@ -423,7 +565,7 @@ class MainActivity : Activity() {
     private fun buildQuickPanel(): LinearLayout {
         val p = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
-            setBackgroundColor(panel)
+            background = GradientDrawable(GradientDrawable.Orientation.LEFT_RIGHT, intArrayOf(0xD9161B23.toInt(), 0xF2161B23.toInt()))
             setPadding(dp(22), dp(24), dp(22), dp(18))
             visibility = View.GONE
             elevation = dp(12).toFloat()
@@ -523,6 +665,7 @@ class MainActivity : Activity() {
                 if (list.isNotEmpty()) {
                     shows = list
                     showsLoadedAt = System.currentTimeMillis()
+                    saveShows()
                     featured = list.take(6)
                     featuredIndex = 0
                 }
@@ -649,13 +792,13 @@ class MainActivity : Activity() {
         if (!force && news.isNotEmpty() && System.currentTimeMillis() - newsLoadedAt < 20 * 60_000L) {
             showNews(); return
         }
-        newsList.removeAllViews()
-        newsList.addView(infoText("Chargement des actualités…"))
+        if (news.isNotEmpty()) showNews() // ancienne copie tout de suite, la nouvelle arrive derrière
+        else { newsList.removeAllViews(); newsList.addView(infoText("Chargement des actualités…")) }
         Thread {
             val list = try { Content.loadNews() } catch (_: Exception) { emptyList() }
             runOnUiThread {
-                if (list.isNotEmpty()) { news = list; newsLoadedAt = System.currentTimeMillis() }
-                showNews()
+                if (list.isNotEmpty()) { news = list; newsLoadedAt = System.currentTimeMillis(); saveNews() }
+                if (newsList.findFocus() == null || list.isNotEmpty() && newsList.childCount <= 1) showNews()
             }
         }.start()
     }
@@ -831,6 +974,27 @@ class MainActivity : Activity() {
         return card
     }
 
+    private val edgeColors = HashMap<String, Int?>()
+
+    /** Couleur dominante du bord d'une icône (null si le bord est transparent). */
+    private fun edgeColor(a: App): Int? = edgeColors.getOrPut(a.pkg) {
+        try {
+            val n = 48
+            val bmp = android.graphics.Bitmap.createBitmap(n, n, android.graphics.Bitmap.Config.ARGB_8888)
+            val c = Canvas(bmp)
+            a.icon.setBounds(0, 0, n, n)
+            a.icon.draw(c)
+            var r = 0L; var g = 0L; var b = 0L; var k = 0; var total = 0
+            for (i in 0 until n) for ((x, y) in listOf(i to 2, i to n - 3, 2 to i, n - 3 to i)) {
+                total++
+                val p = bmp.getPixel(x, y)
+                if (Color.alpha(p) > 200) { r += Color.red(p); g += Color.green(p); b += Color.blue(p); k++ }
+            }
+            bmp.recycle()
+            if (k * 2 < total) null else Color.rgb((r / k).toInt(), (g / k).toInt(), (b / k).toInt())
+        } catch (_: Exception) { null }
+    }
+
     private fun roundApp(a: App, withLabel: Boolean): View {
         // Pas de fond blanc : l'icône garde son propre fond, découpée en rond
         val circle = FrameLayout(this).apply {
@@ -843,27 +1007,26 @@ class MainActivity : Activity() {
         }
         val adaptive = Build.VERSION.SDK_INT >= 26 && a.icon is AdaptiveIconDrawable
         if (adaptive) {
-            // Icône moderne : son fond remplit tout le rond
-            val ai = a.icon as AdaptiveIconDrawable
-            val layers = listOfNotNull(ai.background, ai.foreground)
-            val full = android.graphics.drawable.LayerDrawable(layers.toTypedArray())
+            // Icône moderne : Android la dessine déjà en forme ronde avec son propre fond,
+            // à la taille exacte du rond. Rien n'est recadré, donc rien n'est coupé.
             circle.addView(ImageView(this).apply {
-                setImageDrawable(full)
-                scaleType = ImageView.ScaleType.CENTER_CROP
-                scaleX = 1.45f; scaleY = 1.45f
+                setImageDrawable(a.icon)
+                scaleType = ImageView.ScaleType.FIT_XY
             }, FrameLayout.LayoutParams(MATCH, MATCH))
         } else {
-            // Ancienne icône (souvent avec son propre fond déjà dessiné) : agrandie dans le rond
+            // Ancienne icône carrée : posée en entier au centre (sa diagonale tient dans le rond),
+            // sur la couleur de son propre bord, pour que le fond paraisse continu.
+            circle.background = oval(edgeColor(a) ?: pill, null)
             circle.addView(ImageView(this).apply {
                 setImageDrawable(a.icon)
                 scaleType = ImageView.ScaleType.FIT_CENTER
-            }, FrameLayout.LayoutParams(dp(62), dp(62), Gravity.CENTER))
+            }, FrameLayout.LayoutParams(dp(46), dp(46), Gravity.CENTER))
         }
         focusEffect(circle, ring = true, oval = true)
 
         if (!withLabel) {
             circle.layoutParams = LinearLayout.LayoutParams(dp(69), dp(69)).apply {
-                marginEnd = dp(16); topMargin = dp(6); bottomMargin = dp(6)
+                marginEnd = dp(18)
             }
             return circle
         }
@@ -922,11 +1085,11 @@ class MainActivity : Activity() {
             setColorFilter(fg)
             val pad = dp(if (size > 34) 10 else 7)
             setPadding(pad, pad, pad, pad)
-            background = oval(if (filled) pill else Color.TRANSPARENT, null)
+            background = if (filled) glass(oval = true) else oval(Color.TRANSPARENT, null)
             isFocusable = true
             setOnClickListener { action() }
             setOnFocusChangeListener { _, f ->
-                background = oval(if (f) fg else if (filled) pill else Color.TRANSPARENT, null)
+                background = if (f) oval(fg, null) else if (filled) glass(oval = true) else oval(Color.TRANSPARENT, null)
                 setColorFilter(if (f) bg else fg)
             }
         }
@@ -937,8 +1100,17 @@ class MainActivity : Activity() {
     private fun pillBox() = LinearLayout(this).apply {
         orientation = LinearLayout.HORIZONTAL
         gravity = Gravity.CENTER_VERTICAL
-        background = rounded(pill, 99)
+        background = glass()
         setPadding(dp(4), dp(4), dp(4), dp(4))
+    }
+
+    /** Effet « verre liquide » : fond translucide, reflet clair en haut, fin liseré lumineux. */
+    private fun glass(oval: Boolean = false) = GradientDrawable(
+        GradientDrawable.Orientation.TOP_BOTTOM,
+        intArrayOf(0x52FFFFFF, 0x1FFFFFFF, 0x2E0B0E14)
+    ).apply {
+        if (oval) shape = GradientDrawable.OVAL else cornerRadius = dp(99).toFloat()
+        setStroke(dp(1), 0x59FFFFFF)
     }
 
     private fun rowTitle(t: String) = TextView(this).apply {
@@ -951,9 +1123,13 @@ class MainActivity : Activity() {
 
     private fun hScroll(content: View) = HorizontalScrollView(this).apply {
         isHorizontalScrollBarEnabled = false
+        // de la marge autour : une carte agrandie (sélection) n'est jamais coupée
+        setPadding(dp(8), dp(10), dp(8), dp(10))
         clipToPadding = false
         clipChildren = false
+        (content as? ViewGroup)?.clipChildren = false
         addView(content)
+        layoutParams = LinearLayout.LayoutParams(MATCH, WRAP).apply { marginStart = -dp(8); marginEnd = -dp(8) }
     }
 
     // ---------------------------------------------------------------- onglets et panneau
@@ -983,7 +1159,7 @@ class MainActivity : Activity() {
             val current = i == currentTab
             t.background = rounded(when {
                 focused -> fg
-                current -> Color.parseColor("#3A4556")
+                current -> 0x40FFFFFF
                 else -> Color.TRANSPARENT
             }, 99)
             t.setTextColor(if (focused) bg else fg)
@@ -1040,6 +1216,7 @@ class MainActivity : Activity() {
 
     private fun checkUpdate(manual: Boolean) {
         if (manual) updateItem.text = "Recherche en cours…"
+        prefs.edit().putLong("update_at", System.currentTimeMillis()).apply()
         Thread {
             val rel = try { Updater.latest() } catch (_: Exception) { null }
             val current = Updater.currentNumber(this)
@@ -1150,6 +1327,7 @@ class MainActivity : Activity() {
         const val TAB_CANAL = 1
         const val TAB_NEWS = 2
         const val TAB_APPS = 3
+        const val NEWS_EVERY = 20 * 60_000L
     }
 }
 

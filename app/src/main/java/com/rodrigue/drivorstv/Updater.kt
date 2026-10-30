@@ -94,6 +94,11 @@ class InstallReceiver : BroadcastReceiver() {
                 }
             }
             PackageInstaller.STATUS_SUCCESS -> {}
+            PackageInstaller.STATUS_FAILURE_CONFLICT, PackageInstaller.STATUS_FAILURE_INCOMPATIBLE -> Toast.makeText(
+                ctx,
+                "Nouvelle clé de sécurité : désinstalle Drivors TV, puis réinstalle-le avec le code 7738260 dans Downloader.",
+                Toast.LENGTH_LONG
+            ).show()
             else -> Toast.makeText(
                 ctx,
                 "Mise à jour non installée : " + (intent.getStringExtra(PackageInstaller.EXTRA_STATUS_MESSAGE) ?: ""),
