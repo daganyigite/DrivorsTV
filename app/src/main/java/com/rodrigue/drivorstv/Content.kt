@@ -36,7 +36,82 @@ data class News(
     val category: String = ""
 )
 
+/** Une vidéo YouTube récente d'une chaîne suivie. */
+data class Video(val id: String, val title: String, val channel: String, val date: Long) {
+    val thumb get() = "https://i.ytimg.com/vi/$id/mqdefault.jpg"
+}
+
 object Content {
+
+    /** Chaînes YouTube choisies par Rodrigue (flux publics de YouTube, sans clé). */
+    val youtubeChannels = listOf(
+        "UCJy0lX8ThZ7lCtst7JnegWQ", // Jojol
+        "UC-pdFydi9ooxEfATh3KoiIw", // STEVEN
+        "UCgoxc-VKU0cw9BcM9z_qokg", // Frandroid
+        "UCPQsSFJurluaMOG1qL0Y7sA", // PP World
+        "UCck5J0M6YKnXCrnuXkCFuvw", // Himra officiel
+        "UCwWADQnhqYBVFmuzeYmbIlg", // Tobeh
+        "UCAz-755tH3m8_BwaluzdJwQ", // Numerama
+        "UC46ytp7_ZW9X92vjqHKVuuA", // Faiz Dev
+        "UCZ5qxuvquQABNtjcawNMowA", // DaddyFamtech
+        "UC1ndVn8sa4oTbW09P5ICOog", // amazing mac TV
+        "UCE_M8A5yxnLfW0KghEeajjw"  // Apple
+    )
+
+    /** Les vidéos les plus récentes de toutes ces chaînes (sans les Shorts). */
+    fun loadYoutube(): List<Video> {
+        val pool = java.util.concurrent.Executors.newFixedThreadPool(4)
+        val jobs = youtubeChannels.map { id ->
+            pool.submit<List<Video>> {
+                try { parseYoutube(Net.get("https://www.youtube.com/feeds/videos.xml?channel_id=$id", 3_000_000)) }
+                catch (_: Exception) { emptyList() }
+            }
+        }
+        val all = jobs.flatMap { try { it.get() } catch (_: Exception) { emptyList() } }
+        pool.shutdown()
+        return all.distinctBy { it.id }.sortedByDescending { it.date }.take(30)
+    }
+
+    private fun parseYoutube(bytes: ByteArray): List<Video> {
+        val p = Xml.newPullParser()
+        p.setFeature(XmlPullParser.FEATURE_PROCESS_NAMESPACES, true)
+        p.setInput(bytes.inputStream(), null)
+        val iso = SimpleDateFormat("yyyy-MM-dd'T'HH:mm:ss", Locale.US).apply { timeZone = TimeZone.getTimeZone("UTC") }
+        val out = mutableListOf<Video>()
+        var inEntry = false
+        var id = ""; var title = ""; var channel = ""; var link = ""; var date = 0L
+        var ev = p.eventType
+        while (ev != XmlPullParser.END_DOCUMENT) {
+            if (ev == XmlPullParser.START_TAG) {
+                when (p.name) {
+                    "entry" -> { inEntry = true; id = ""; title = ""; channel = ""; link = ""; date = 0L }
+                    "videoId" -> if (inEntry) id = p.nextText()
+                    "title" -> if (inEntry && title.isEmpty()) title = p.nextText()
+                    "name" -> if (inEntry) channel = p.nextText()
+                    "link" -> if (inEntry) link = p.getAttributeValue(null, "href") ?: ""
+                    "published" -> if (inEntry) date = try { iso.parse(p.nextText().take(19))?.time ?: 0L } catch (_: Exception) { 0L }
+                }
+            } else if (ev == XmlPullParser.END_TAG && p.name == "entry") {
+                inEntry = false
+                if (id.isNotEmpty() && !link.contains("/shorts/")) out += Video(id, title, channel, date)
+            }
+            ev = p.next()
+        }
+        return out
+    }
+
+    fun videosToJson(l: List<Video>): String = JSONArray().apply {
+        for (v in l) put(JSONObject().put("id", v.id).put("title", v.title).put("channel", v.channel).put("date", v.date))
+    }.toString()
+
+    fun videosFromJson(t: String): List<Video> = try {
+        val a = JSONArray(t)
+        (0 until a.length()).map { i ->
+            val o = a.getJSONObject(i)
+            Video(o.optString("id"), o.optString("title"), o.optString("channel"), o.optLong("date"))
+        }.filter { it.id.isNotEmpty() }
+    } catch (_: Exception) { emptyList() }
+
 
     /** Plateformes reconnues, et l'appli Android TV qui va avec. */
     val platformApps = linkedMapOf(

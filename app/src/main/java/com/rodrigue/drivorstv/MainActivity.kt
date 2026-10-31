@@ -90,6 +90,10 @@ class MainActivity : Activity() {
     private lateinit var crunchyRow: LinearLayout
     private lateinit var crunchyTitle: LinearLayout
     private var crunchy: List<Show> = emptyList()
+    private lateinit var youtubeRow: LinearLayout
+    private lateinit var youtubeTitle: LinearLayout
+    private var videos: List<Video> = emptyList()
+    private var videosLoadedAt = 0L
     private lateinit var myAppsRow: LinearLayout
     private lateinit var heroSource: TextView
     private lateinit var heroTitle: TextView
@@ -187,6 +191,12 @@ class MainActivity : Activity() {
                     fillSelection(); showFeatured()
                 }
             }
+            val y = java.io.File(filesDir, "youtube.json")
+            if (y.exists()) {
+                videos = Content.videosFromJson(y.readText())
+                videosLoadedAt = prefs.getLong("videos_at", 0L)
+                if (videos.isNotEmpty()) fillSelection()
+            }
             val n = java.io.File(filesDir, "news.json")
             if (n.exists()) {
                 news = Content.newsFromJson(n.readText())
@@ -264,7 +274,9 @@ class MainActivity : Activity() {
         super.onResume()
         if (appsDirty) { appsDirty = false; refreshApps() }
         if (this::homeItem.isInitialized) homeItem.text = homeLabel()
-        if (System.currentTimeMillis() - showsLoadedAt > 3 * 3600_000L) loadShows()
+        // (rangée Crunchyroll vide = chargement aussi, même si le reste est récent)
+        if (System.currentTimeMillis() - showsLoadedAt > 3 * 3600_000L || crunchy.isEmpty()) loadShows()
+        if (System.currentTimeMillis() - videosLoadedAt > 3600_000L) loadVideos()
         // Recherche de mise à jour une fois par jour (pas seulement au démarrage)
         if (System.currentTimeMillis() - prefs.getLong("update_at", 0L) > 12 * 3600_000L) checkUpdate(manual = false)
         handler.removeCallbacks(rotate)
@@ -320,7 +332,7 @@ class MainActivity : Activity() {
 
         homeRows = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
-            setPadding(dp(36), 0, dp(36), dp(200))
+            setPadding(dp(48), 0, dp(48), dp(200))
             clipChildren = false
             clipToPadding = false
         }
@@ -333,11 +345,15 @@ class MainActivity : Activity() {
         seriesRow = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
         filmsTitle = rowTitle("Films du moment").apply { setPadding(0, dp(14), 0, dp(8)); visibility = View.GONE }
         seriesTitle = rowTitle("Séries du moment").apply { setPadding(0, dp(14), 0, dp(8)); visibility = View.GONE }
+        youtubeRow = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
+        youtubeTitle = channelTitle("YouTube", YOUTUBE).apply { visibility = View.GONE }
         crunchyRow = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
         crunchyTitle = channelTitle("Crunchyroll", CRUNCHYROLL).apply { visibility = View.GONE }
         // Ordre : Mes applis, puis les chaînes d'applis (Crunchyroll), puis la sélection
         homeRows.addView(rowTitle("Mes applis"))
         homeRows.addView(hScroll(myAppsRow))
+        homeRows.addView(youtubeTitle)
+        homeRows.addView(hScroll(youtubeRow))
         homeRows.addView(crunchyTitle)
         homeRows.addView(hScroll(crunchyRow))
         homeRows.addView(rowTitle("Sélection pour toi").apply { setPadding(0, dp(14), 0, dp(8)) })
@@ -353,7 +369,7 @@ class MainActivity : Activity() {
 
         appsPage = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
-            setPadding(dp(36), dp(84), dp(36), dp(200))
+            setPadding(dp(48), dp(84), dp(48), dp(200))
             clipChildren = false; clipToPadding = false
             visibility = View.GONE
         }
@@ -397,7 +413,7 @@ class MainActivity : Activity() {
         val bar = LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL
             gravity = Gravity.CENTER_VERTICAL
-            setPadding(dp(36), dp(18), dp(36), 0)
+            setPadding(dp(48), dp(18), dp(48), 0)
         }
 
         // Pilule : Rechercher, Accueil, Canal+, News, Applis
@@ -489,11 +505,13 @@ class MainActivity : Activity() {
     }
 
     private fun buildHero(): FrameLayout {
-        val box = FrameLayout(this)
+        val box = FrameLayout(this).apply { clipChildren = false; clipToPadding = false }
 
         val textCol = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
-            setPadding(dp(36), dp(86), 0, 0)
+            clipToPadding = false
+            clipChildren = false
+            setPadding(dp(48), dp(86), 0, 0)
         }
         heroSource = TextView(this).apply {
             setTextColor(fg); textSize = 15f; typeface = Typeface.DEFAULT_BOLD
@@ -509,11 +527,11 @@ class MainActivity : Activity() {
         }
         heroOpen = TextView(this).apply {
             text = "Regarder"
-            setTextColor(bg)
+            setTextColor(fg)
             textSize = 14f
             typeface = Typeface.DEFAULT_BOLD
-            setPadding(dp(18), dp(7), dp(18), dp(7))
-            background = rounded(fg, 99)
+            setPadding(dp(20), dp(9), dp(20), dp(9))
+            background = glass()
             isFocusable = true
             setOnClickListener { featured.getOrNull(featuredIndex)?.let { watchOrDetail(it) } }
             setOnKeyListener { _, code, ev ->
@@ -524,7 +542,10 @@ class MainActivity : Activity() {
                     else -> false
                 }
             }
-            focusEffect(this, ring = true)
+            setOnFocusChangeListener { v, f ->
+                v.animate().scaleX(if (f) 1.08f else 1f).scaleY(if (f) 1.08f else 1f).setDuration(120).start()
+                v.background = if (f) glassBright() else glass()
+            }
         }
         textCol.addView(heroSource)
         textCol.addView(heroTitle, LinearLayout.LayoutParams(dp(560), WRAP))
@@ -534,7 +555,7 @@ class MainActivity : Activity() {
 
         dots = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL; gravity = Gravity.CENTER_VERTICAL }
         box.addView(dots, FrameLayout.LayoutParams(WRAP, WRAP, Gravity.END or Gravity.BOTTOM).apply {
-            marginEnd = dp(36); bottomMargin = dp(18)
+            marginEnd = dp(48); bottomMargin = dp(18)
         })
         return box
     }
@@ -542,7 +563,7 @@ class MainActivity : Activity() {
     private fun buildNewsPage(): LinearLayout {
         val page = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
-            setPadding(dp(36), dp(80), dp(36), dp(200))
+            setPadding(dp(48), dp(80), dp(48), dp(200))
             clipChildren = false; clipToPadding = false
             visibility = View.GONE
         }
@@ -656,18 +677,101 @@ class MainActivity : Activity() {
                 found[ai.packageName] = App(ri.loadLabel(pm).toString(), ai.packageName, ri.loadIcon(pm), banner, intent)
             }
         }
+        // Ordre choisi par l'utilisateur, puis les nouvelles applis par ordre alphabétique
+        val order = (prefs.getString("app_order", "") ?: "").split(',').filter { it.isNotEmpty() }
         return found.values.sortedBy { it.label.lowercase() }
+            .sortedBy { order.indexOf(it.pkg).let { i -> if (i < 0) Int.MAX_VALUE else i } }
+    }
+
+    // ---------------------------------------------------------------- déplacer les applis
+
+    private var movingPkg: String? = null
+    private var swallowUp = false
+
+    /** Appui long sur une appli : déplacer, mettre en premier, ou ouvrir sa fiche. */
+    private fun appMenu(a: App) {
+        val choices = arrayOf("Déplacer", "Mettre en premier", "Infos de l'appli")
+        AlertDialog.Builder(this, android.R.style.Theme_DeviceDefault_Dialog_Alert)
+            .setTitle(a.label)
+            .setItems(choices) { _, i ->
+                when (i) {
+                    0 -> startMove(a)
+                    1 -> { moveTo(a, 0); toast("${a.label} est en premier") }
+                    2 -> appInfo(a)
+                }
+            }
+            .setNegativeButton("Annuler", null)
+            .show()
+    }
+
+    private fun startMove(a: App) {
+        movingPkg = a.pkg
+        toast("◀ ▶ pour déplacer ${a.label}, puis OK pour valider")
+        refocusApp(a.pkg)
+    }
+
+    private fun endMove() {
+        val p = movingPkg ?: return
+        movingPkg = null
+        refocusApp(p)
+    }
+
+    private fun moveTo(a: App, index: Int) {
+        val l = apps.toMutableList()
+        val from = l.indexOfFirst { it.pkg == a.pkg }
+        if (from < 0) return
+        val to = index.coerceIn(0, l.size - 1)
+        if (from == to) return
+        l.add(to, l.removeAt(from))
+        apps = l
+        prefs.edit().putString("app_order", l.joinToString(",") { it.pkg }).apply()
+        rebuildAppRows()
+        refocusApp(a.pkg)
+    }
+
+    private fun rebuildAppRows() {
+        myAppsRow.removeAllViews()
+        for (x in apps) myAppsRow.addView(roundApp(x, withLabel = false))
+        appsGrid.removeAllViews()
+        for (x in apps) appsGrid.addView(roundApp(x, withLabel = true))
+    }
+
+    /** Remet la sélection sur l'appli (dans la rangée ou la grille affichée) et montre si elle se déplace. */
+    private fun refocusApp(pkg: String) {
+        val i = apps.indexOfFirst { it.pkg == pkg }
+        if (i < 0) return
+        val v: View? = if (currentTab == TAB_APPS) (appsGrid.getChildAt(i) as? ViewGroup)?.getChildAt(0) else myAppsRow.getChildAt(i)
+        v?.post {
+            v.requestFocus()
+            if (movingPkg == pkg) v.foreground = GradientDrawable().apply {
+                shape = GradientDrawable.OVAL; setStroke(dp(4), Color.parseColor("#F5A524"))
+            }
+        }
+    }
+
+    private fun moveKeys(a: App, code: Int, ev: KeyEvent): Boolean {
+        val center = code == KeyEvent.KEYCODE_DPAD_CENTER || code == KeyEvent.KEYCODE_ENTER
+        if (center && ev.action == KeyEvent.ACTION_UP && swallowUp) { swallowUp = false; return true }
+        if (movingPkg != a.pkg) return false
+        if (ev.action != KeyEvent.ACTION_DOWN) return true
+        val i = apps.indexOfFirst { it.pkg == a.pkg }
+        val step = if (currentTab == TAB_APPS) appsGrid.columnCount else 1
+        when (code) {
+            KeyEvent.KEYCODE_DPAD_LEFT -> moveTo(a, i - 1)
+            KeyEvent.KEYCODE_DPAD_RIGHT -> moveTo(a, i + 1)
+            KeyEvent.KEYCODE_DPAD_UP -> if (currentTab == TAB_APPS) moveTo(a, i - step)
+            KeyEvent.KEYCODE_DPAD_DOWN -> if (currentTab == TAB_APPS) moveTo(a, i + step)
+            KeyEvent.KEYCODE_BACK -> endMove()
+            else -> if (center) { swallowUp = true; endMove() }
+        }
+        return true
     }
 
     private fun refreshApps() {
         apps = loadApps()
         canalTab.text = canalLabel()
 
-        myAppsRow.removeAllViews()
-        for (a in apps) myAppsRow.addView(roundApp(a, withLabel = false))
-
-        appsGrid.removeAllViews()
-        for (a in apps) appsGrid.addView(roundApp(a, withLabel = true))
+        rebuildAppRows()
 
         fillSelection()
     }
@@ -679,10 +783,10 @@ class MainActivity : Activity() {
             val list = try { Content.loadShows(BuildConfig.TMDB_KEY) } catch (_: Exception) { emptyList() }
             val cr = try { Content.loadProvider(BuildConfig.TMDB_KEY, 283, "Crunchyroll") } catch (_: Exception) { emptyList() }
             runOnUiThread {
+                if (cr.isNotEmpty()) crunchy = cr
                 if (list.isNotEmpty()) {
                     shows = list
                     showsLoadedAt = System.currentTimeMillis()
-                    if (cr.isNotEmpty()) crunchy = cr
                     saveShows()
                     featured = list.take(6)
                     featuredIndex = 0
@@ -693,14 +797,51 @@ class MainActivity : Activity() {
         }.start()
     }
 
+    private fun loadVideos() {
+        Thread {
+            val l = try { Content.loadYoutube() } catch (_: Exception) { emptyList() }
+            runOnUiThread {
+                if (l.isNotEmpty()) {
+                    videos = l; videosLoadedAt = System.currentTimeMillis()
+                    try {
+                        java.io.File(filesDir, "youtube.json").writeText(Content.videosToJson(l))
+                        prefs.edit().putLong("videos_at", videosLoadedAt).apply()
+                    } catch (_: Exception) {}
+                    fillSelection()
+                }
+            }
+        }.start()
+    }
+
+    /** Ouvre la vidéo directement dans l'appli YouTube de la télé. */
+    private fun openVideo(v: Video) {
+        val url = Uri.parse("https://www.youtube.com/watch?v=" + v.id)
+        val pkg = findApp(YOUTUBE, "youtube")?.pkg ?: YOUTUBE
+        if (tryStart(Intent(Intent.ACTION_VIEW, url).setPackage(pkg))) return
+        if (tryStart(Intent(Intent.ACTION_VIEW, Uri.parse("vnd.youtube:" + v.id)))) return
+        if (!tryStart(Intent(Intent.ACTION_VIEW, url))) toast("Impossible d'ouvrir YouTube")
+    }
+
+    private fun findApp(pkg: String, name: String): App? =
+        apps.firstOrNull { it.pkg == pkg } ?: apps.firstOrNull { it.label.contains(name, ignoreCase = true) }
+
     private fun fillSelection() {
-        // Crunchyroll : seulement si l'appli est installée
+        // YouTube : dernières vidéos des chaînes choisies
+        youtubeRow.removeAllViews()
+        val ytApp = findApp(YOUTUBE, "youtube")
+        for (v in videos) youtubeRow.addView(landscapeCard(v.title, v.channel, v.thumb) { openVideo(v) })
+        youtubeTitle.visibility = if (videos.isNotEmpty()) View.VISIBLE else View.GONE
+        (youtubeRow.parent as? View)?.visibility = youtubeTitle.visibility
+        (youtubeTitle.getChildAt(0) as? ImageView)?.setImageDrawable(ytApp?.icon)
+
+        // Crunchyroll : seulement si l'appli est installée (reconnue par son nom)
         crunchyRow.removeAllViews()
-        val hasCr = apps.any { it.pkg == CRUNCHYROLL } && crunchy.isNotEmpty()
+        val crApp = findApp(CRUNCHYROLL, "crunchyroll")
+        val hasCr = crApp != null && crunchy.isNotEmpty()
         if (hasCr) for (s in crunchy) crunchyRow.addView(landscapeCard(s))
         crunchyTitle.visibility = if (hasCr) View.VISIBLE else View.GONE
         (crunchyRow.parent as? View)?.visibility = crunchyTitle.visibility
-        (crunchyTitle.getChildAt(0) as? ImageView)?.setImageDrawable(apps.firstOrNull { it.pkg == CRUNCHYROLL }?.icon)
+        (crunchyTitle.getChildAt(0) as? ImageView)?.setImageDrawable(crApp?.icon)
         selectionRow.removeAllViews()
         filmsRow.removeAllViews()
         seriesRow.removeAllViews()
@@ -844,7 +985,7 @@ class MainActivity : Activity() {
         }
         // 3 cartes par ligne, sur toute la largeur de l'écran
         val screenDp = (resources.displayMetrics.widthPixels / resources.displayMetrics.density).toInt()
-        val w = (screenDp - 72 - 2 * 22) / 3
+        val w = (screenDp - 96 - 2 * 22) / 3
         shown.forEachIndexed { i, n -> newsList.addView(newsCard(n, w, last = i % 3 == 2)) }
     }
 
@@ -1002,20 +1143,23 @@ class MainActivity : Activity() {
         })
     }
 
+    private fun landscapeCard(s: Show): View =
+        landscapeCard(s.name, "", s.backdrop ?: s.poster) { openShow(s) }
+
     /** Carte paysage (16:9) avec le titre qui apparaît sous la carte sélectionnée. */
-    private fun landscapeCard(s: Show): View {
+    private fun landscapeCard(title: String, sub: String, image: String?, onOpen: () -> Unit): View {
         val box = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL; clipChildren = false }
         val img = ImageView(this).apply {
             scaleType = ImageView.ScaleType.CENTER_CROP
             background = rounded(Color.parseColor("#1E2D4A"), 14)
             clipToOutline = true
             isFocusable = true
-            contentDescription = s.name
-            setOnClickListener { openShow(s) }
+            contentDescription = title
+            setOnClickListener { onOpen() }
         }
-        Images.load(s.backdrop ?: s.poster, img, 420)
+        Images.load(image, img, 420)
         val label = TextView(this).apply {
-            text = s.name
+            text = if (sub.isNotEmpty()) "$title  ·  $sub" else title
             setTextColor(fg); textSize = 12f; typeface = Typeface.DEFAULT_BOLD
             maxLines = 1; ellipsize = TextUtils.TruncateAt.END
             visibility = View.INVISIBLE
@@ -1077,8 +1221,9 @@ class MainActivity : Activity() {
             clipToOutline = true
             isFocusable = true
             contentDescription = a.label
-            setOnClickListener { launch(a) }
-            setOnLongClickListener { appInfo(a); true }
+            setOnClickListener { if (movingPkg == null) launch(a) }
+            setOnLongClickListener { if (movingPkg == null) appMenu(a); true }
+            setOnKeyListener { _, code, ev -> moveKeys(a, code, ev) }
         }
         val adaptive = Build.VERSION.SDK_INT >= 26 && a.icon is AdaptiveIconDrawable
         if (adaptive) {
@@ -1177,6 +1322,15 @@ class MainActivity : Activity() {
         gravity = Gravity.CENTER_VERTICAL
         background = glass()
         setPadding(dp(4), dp(4), dp(4), dp(4))
+    }
+
+    /** Verre plus lumineux pour l'élément sélectionné. */
+    private fun glassBright() = GradientDrawable(
+        GradientDrawable.Orientation.TOP_BOTTOM,
+        intArrayOf(0x99FFFFFF.toInt(), 0x59FFFFFF, 0x33FFFFFF)
+    ).apply {
+        cornerRadius = dp(99).toFloat()
+        setStroke(dp(2), 0xCCFFFFFF.toInt())
     }
 
     /** Effet « verre liquide » : fond translucide, reflet clair en haut, fin liseré lumineux. */
@@ -1437,6 +1591,7 @@ class MainActivity : Activity() {
         const val TAB_APPS = 3
         const val NEWS_EVERY = 20 * 60_000L
         const val CRUNCHYROLL = "com.crunchyroll.crunchyroid"
+        const val YOUTUBE = "com.google.android.youtube.tv"
     }
 }
 
