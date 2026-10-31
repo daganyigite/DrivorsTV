@@ -75,6 +75,7 @@ class MainActivity : Activity() {
     private lateinit var topBar: View
     private lateinit var heroBox: FrameLayout
     private lateinit var heroImage: ImageView
+    private lateinit var bgDim: View
     private lateinit var homeRows: LinearLayout
     private lateinit var appsPage: LinearLayout
     private lateinit var appsGrid: GridLayout
@@ -86,6 +87,9 @@ class MainActivity : Activity() {
     private lateinit var seriesRow: LinearLayout
     private lateinit var filmsTitle: TextView
     private lateinit var seriesTitle: TextView
+    private lateinit var crunchyRow: LinearLayout
+    private lateinit var crunchyTitle: LinearLayout
+    private var crunchy: List<Show> = emptyList()
     private lateinit var myAppsRow: LinearLayout
     private lateinit var heroSource: TextView
     private lateinit var heroTitle: TextView
@@ -94,6 +98,7 @@ class MainActivity : Activity() {
     private lateinit var dots: LinearLayout
     private lateinit var quickPanel: LinearLayout
     private lateinit var updateItem: TextView
+    private lateinit var homeItem: TextView
     private lateinit var updatePill: TextView
     private lateinit var canalTab: TextView
     private lateinit var detail: FrameLayout
@@ -173,6 +178,8 @@ class MainActivity : Activity() {
         try {
             val f = java.io.File(filesDir, "shows.json")
             if (f.exists()) {
+                val cf = java.io.File(filesDir, "crunchy.json")
+                if (cf.exists()) crunchy = Content.showsFromJson(cf.readText())
                 val l = Content.showsFromJson(f.readText())
                 if (l.isNotEmpty()) {
                     shows = l; featured = l.take(6); featuredIndex = 0
@@ -191,6 +198,7 @@ class MainActivity : Activity() {
     private fun saveShows() {
         try {
             java.io.File(filesDir, "shows.json").writeText(Content.showsToJson(shows))
+            java.io.File(filesDir, "crunchy.json").writeText(Content.showsToJson(crunchy))
             prefs.edit().putLong("shows_at", showsLoadedAt).apply()
         } catch (_: Exception) {}
     }
@@ -255,6 +263,7 @@ class MainActivity : Activity() {
     override fun onResume() {
         super.onResume()
         if (appsDirty) { appsDirty = false; refreshApps() }
+        if (this::homeItem.isInitialized) homeItem.text = homeLabel()
         if (System.currentTimeMillis() - showsLoadedAt > 3 * 3600_000L) loadShows()
         // Recherche de mise à jour une fois par jour (pas seulement au démarrage)
         if (System.currentTimeMillis() - prefs.getLong("update_at", 0L) > 12 * 3600_000L) checkUpdate(manual = false)
@@ -292,6 +301,7 @@ class MainActivity : Activity() {
 
     private fun buildScreen(): View {
         val root = FrameLayout(this).apply { setBackgroundColor(bg) }
+        root.addView(buildBackdrop(), FrameLayout.LayoutParams(MATCH, MATCH))
 
         // Le défilement automatique d'Android est coupé : c'est snapScroll() qui décide
         scroll = object : ScrollView(this) {
@@ -323,10 +333,15 @@ class MainActivity : Activity() {
         seriesRow = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
         filmsTitle = rowTitle("Films du moment").apply { setPadding(0, dp(14), 0, dp(8)); visibility = View.GONE }
         seriesTitle = rowTitle("Séries du moment").apply { setPadding(0, dp(14), 0, dp(8)); visibility = View.GONE }
-        homeRows.addView(rowTitle("Sélection pour toi"))
-        homeRows.addView(hScroll(selectionRow))
-        homeRows.addView(rowTitle("Mes applis").apply { setPadding(0, dp(14), 0, dp(8)) })
+        crunchyRow = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
+        crunchyTitle = channelTitle("Crunchyroll", CRUNCHYROLL).apply { visibility = View.GONE }
+        // Ordre : Mes applis, puis les chaînes d'applis (Crunchyroll), puis la sélection
+        homeRows.addView(rowTitle("Mes applis"))
         homeRows.addView(hScroll(myAppsRow))
+        homeRows.addView(crunchyTitle)
+        homeRows.addView(hScroll(crunchyRow))
+        homeRows.addView(rowTitle("Sélection pour toi").apply { setPadding(0, dp(14), 0, dp(8)) })
+        homeRows.addView(hScroll(selectionRow))
         homeRows.addView(filmsTitle)
         homeRows.addView(hScroll(filmsRow))
         homeRows.addView(seriesTitle)
@@ -358,7 +373,10 @@ class MainActivity : Activity() {
             alpha = 0f
         }
         root.addView(scrim, FrameLayout.LayoutParams(MATCH, dp(118)))
-        scroll.setOnScrollChangeListener { _, _, y, _, _ -> scrim.alpha = (y / dp(60).toFloat()).coerceIn(0f, 1f) }
+        scroll.setOnScrollChangeListener { _, _, y, _, _ ->
+            scrim.alpha = (y / dp(60).toFloat()).coerceIn(0f, 1f)
+            updateDim()
+        }
 
         topBar = buildTopBar()
         root.addView(topBar, FrameLayout.LayoutParams(MATCH, WRAP))
@@ -382,16 +400,6 @@ class MainActivity : Activity() {
             setPadding(dp(36), dp(18), dp(36), 0)
         }
 
-        // Photo de profil (initiale)
-        bar.addView(TextView(this).apply {
-            text = "R"
-            setTextColor(fg)
-            textSize = 13f
-            typeface = Typeface.DEFAULT_BOLD
-            gravity = Gravity.CENTER
-            background = glass(oval = true)
-        }, LinearLayout.LayoutParams(dp(33), dp(33)).apply { marginEnd = dp(10) })
-
         // Pilule : Rechercher, Accueil, Canal+, News, Applis
         val nav = pillBox()
         nav.addView(iconButton(R.drawable.ic_search, "Rechercher") { openSearch() })
@@ -407,7 +415,6 @@ class MainActivity : Activity() {
         // Pilule : 3 icônes rapides
         val quick = pillBox()
         quick.addView(iconButton(R.drawable.ic_sparkle, "Assistant") { openAssistant() })
-        quick.addView(iconButton(R.drawable.ic_home, "Maison connectée") { openHomeApp() })
         quick.addView(iconButton(R.drawable.ic_gear, "Paramètres") { openSettings(Settings.ACTION_SETTINGS) })
         bar.addView(quick, wrapParams(end = 10))
 
@@ -450,32 +457,39 @@ class MainActivity : Activity() {
         return bar
     }
 
-    private fun buildHero(): FrameLayout {
-        val box = FrameLayout(this).apply { background = HeroArt(accent) }
-
-        // Image de fond du film / de la série
+    /** Image du film / de la série sur TOUT l'écran, derrière le reste. */
+    private fun buildBackdrop(): FrameLayout {
+        val layer = FrameLayout(this).apply { background = HeroArt(accent) }
         heroImage = ImageView(this).apply { scaleType = ImageView.ScaleType.CENTER_CROP }
-        box.addView(heroImage, FrameLayout.LayoutParams(MATCH, MATCH))
-
-        // Voiles sombres légers : l'image couvre tout l'écran, le texte reste lisible
-        box.addView(View(this).apply {
+        layer.addView(heroImage, FrameLayout.LayoutParams(MATCH, MATCH))
+        // voile à gauche (texte lisible) et en bas (rangées lisibles)
+        layer.addView(View(this).apply {
             background = GradientDrawable(
                 GradientDrawable.Orientation.LEFT_RIGHT,
-                intArrayOf(0xCC0B0E14.toInt(), 0x660B0E14, 0x000B0E14)
+                intArrayOf(0xD90B0E14.toInt(), 0x800B0E14.toInt(), 0x000B0E14)
             )
-        }, FrameLayout.LayoutParams(dp(520), MATCH))
-        box.addView(View(this).apply {
+        }, FrameLayout.LayoutParams(dp(600), MATCH))
+        layer.addView(View(this).apply {
             background = GradientDrawable(
                 GradientDrawable.Orientation.TOP_BOTTOM,
-                intArrayOf(0x000B0E14, 0xFF0B0E14.toInt())
+                intArrayOf(0x000B0E14, 0x990B0E14.toInt(), 0xF20B0E14.toInt())
             )
-        }, FrameLayout.LayoutParams(MATCH, dp(90), Gravity.BOTTOM))
-        box.addView(View(this).apply {
-            background = GradientDrawable(
-                GradientDrawable.Orientation.TOP_BOTTOM,
-                intArrayOf(0xB30B0E14.toInt(), 0x000B0E14)
-            )
-        }, FrameLayout.LayoutParams(MATCH, dp(80), Gravity.TOP))
+        }, FrameLayout.LayoutParams(MATCH, MATCH).apply { topMargin = dp(230) })
+        // assombrit le fond quand on descend dans les rangées ou qu'on change d'onglet
+        bgDim = View(this).apply { setBackgroundColor(bg); alpha = 0f }
+        layer.addView(bgDim, FrameLayout.LayoutParams(MATCH, MATCH))
+        return layer
+    }
+
+    private fun updateDim() {
+        if (!this::bgDim.isInitialized) return
+        val target = if (currentTab != TAB_HOME) 0.94f
+            else (scroll.scrollY / dp(260).toFloat()).coerceIn(0f, 0.8f)
+        bgDim.alpha = target
+    }
+
+    private fun buildHero(): FrameLayout {
+        val box = FrameLayout(this)
 
         val textCol = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
@@ -590,6 +604,8 @@ class MainActivity : Activity() {
             list.addView(panelItem(label) { hideQuickPanel(); openSettings(action) })
         }
         list.addView(panelItem("Raccourci Canal+ : changer l'appli") { hideQuickPanel(); chooseCanalApp() })
+        homeItem = panelItem(homeLabel()) { toggleHomeLock() }
+        list.addView(homeItem)
         updateItem = panelItem("Rechercher une mise à jour") {
             if (pendingUpdate != null) startUpdate() else checkUpdate(manual = true)
         }
@@ -661,10 +677,12 @@ class MainActivity : Activity() {
     private fun loadShows() {
         Thread {
             val list = try { Content.loadShows(BuildConfig.TMDB_KEY) } catch (_: Exception) { emptyList() }
+            val cr = try { Content.loadProvider(BuildConfig.TMDB_KEY, 283, "Crunchyroll") } catch (_: Exception) { emptyList() }
             runOnUiThread {
                 if (list.isNotEmpty()) {
                     shows = list
                     showsLoadedAt = System.currentTimeMillis()
+                    if (cr.isNotEmpty()) crunchy = cr
                     saveShows()
                     featured = list.take(6)
                     featuredIndex = 0
@@ -676,6 +694,13 @@ class MainActivity : Activity() {
     }
 
     private fun fillSelection() {
+        // Crunchyroll : seulement si l'appli est installée
+        crunchyRow.removeAllViews()
+        val hasCr = apps.any { it.pkg == CRUNCHYROLL } && crunchy.isNotEmpty()
+        if (hasCr) for (s in crunchy) crunchyRow.addView(landscapeCard(s))
+        crunchyTitle.visibility = if (hasCr) View.VISIBLE else View.GONE
+        (crunchyRow.parent as? View)?.visibility = crunchyTitle.visibility
+        (crunchyTitle.getChildAt(0) as? ImageView)?.setImageDrawable(apps.firstOrNull { it.pkg == CRUNCHYROLL }?.icon)
         selectionRow.removeAllViews()
         filmsRow.removeAllViews()
         seriesRow.removeAllViews()
@@ -687,11 +712,15 @@ class MainActivity : Activity() {
             for (s in series) seriesRow.addView(posterCard(s))
             filmsTitle.visibility = if (films.isEmpty()) View.GONE else View.VISIBLE
             seriesTitle.visibility = if (series.isEmpty()) View.GONE else View.VISIBLE
+            (filmsRow.parent as? View)?.visibility = filmsTitle.visibility
+            (seriesRow.parent as? View)?.visibility = seriesTitle.visibility
         } else {
             // Pas encore de films/séries (pas d'internet) : on montre les bannières des applis
             for (a in apps.filter { it.banner != null }) selectionRow.addView(bannerCard(a))
             filmsTitle.visibility = View.GONE
             seriesTitle.visibility = View.GONE
+            (filmsRow.parent as? View)?.visibility = View.GONE
+            (seriesRow.parent as? View)?.visibility = View.GONE
         }
     }
 
@@ -958,6 +987,52 @@ class MainActivity : Activity() {
         return card
     }
 
+    /** Titre de rangée façon Google TV : icône de l'appli + son nom. */
+    private fun channelTitle(label: String, pkg: String) = LinearLayout(this).apply {
+        orientation = LinearLayout.HORIZONTAL
+        gravity = Gravity.CENTER_VERTICAL
+        setPadding(0, dp(16), 0, dp(6))
+        addView(ImageView(this@MainActivity).apply {
+            scaleType = ImageView.ScaleType.FIT_CENTER
+            setImageDrawable(apps.firstOrNull { it.pkg == pkg }?.icon)
+        }, LinearLayout.LayoutParams(dp(24), dp(24)).apply { marginEnd = dp(8) })
+        addView(TextView(this@MainActivity).apply {
+            text = label
+            setTextColor(fg); textSize = 18f; typeface = Typeface.DEFAULT_BOLD
+        })
+    }
+
+    /** Carte paysage (16:9) avec le titre qui apparaît sous la carte sélectionnée. */
+    private fun landscapeCard(s: Show): View {
+        val box = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL; clipChildren = false }
+        val img = ImageView(this).apply {
+            scaleType = ImageView.ScaleType.CENTER_CROP
+            background = rounded(Color.parseColor("#1E2D4A"), 14)
+            clipToOutline = true
+            isFocusable = true
+            contentDescription = s.name
+            setOnClickListener { openShow(s) }
+        }
+        Images.load(s.backdrop ?: s.poster, img, 420)
+        val label = TextView(this).apply {
+            text = s.name
+            setTextColor(fg); textSize = 12f; typeface = Typeface.DEFAULT_BOLD
+            maxLines = 1; ellipsize = TextUtils.TruncateAt.END
+            visibility = View.INVISIBLE
+            setPadding(dp(2), dp(8), 0, 0)
+        }
+        img.setOnFocusChangeListener { v, f ->
+            v.animate().scaleX(if (f) 1.08f else 1f).scaleY(if (f) 1.08f else 1f).setDuration(140).start()
+            v.elevation = if (f) dp(10).toFloat() else 0f
+            v.foreground = if (f) GradientDrawable().apply { cornerRadius = dp(14).toFloat(); setStroke(dp(3), fg) } else null
+            label.visibility = if (f) View.VISIBLE else View.INVISIBLE
+        }
+        box.addView(img, LinearLayout.LayoutParams(dp(200), dp(112)))
+        box.addView(label, LinearLayout.LayoutParams(dp(200), WRAP))
+        box.layoutParams = LinearLayout.LayoutParams(WRAP, WRAP).apply { marginEnd = dp(16) }
+        return box
+    }
+
     private fun bannerCard(a: App): View {
         val card = ImageView(this).apply {
             setImageDrawable(a.banner)
@@ -1149,6 +1224,7 @@ class MainActivity : Activity() {
         homeRows.visibility = if (home) View.VISIBLE else View.GONE
         newsPage.visibility = if (index == TAB_NEWS) View.VISIBLE else View.GONE
         appsPage.visibility = if (index == TAB_APPS) View.VISIBLE else View.GONE
+        updateDim()
         if (this::scroll.isInitialized) scroll.scrollTo(0, 0)
         styleTabs()
     }
@@ -1210,6 +1286,38 @@ class MainActivity : Activity() {
             }
             .setNegativeButton("Annuler", null)
             .show()
+    }
+
+    // ---------------------------------------------------------------- bouton Accueil
+
+    private fun homeLockOn() = prefs.getBoolean(HomeRedirectService.PREF, false)
+
+    private fun serviceEnabled(): Boolean {
+        val list = Settings.Secure.getString(contentResolver, Settings.Secure.ENABLED_ACCESSIBILITY_SERVICES) ?: return false
+        return list.split(':').any { it.startsWith(packageName + "/") }
+    }
+
+    private fun homeLabel() = when {
+        !homeLockOn() -> "Bouton Accueil → Drivors TV : désactivé"
+        serviceEnabled() -> "Bouton Accueil → Drivors TV : activé"
+        else -> "Bouton Accueil → Drivors TV : à autoriser"
+    }
+
+    /** Fixe ou annule Drivors TV comme écran du bouton Accueil. */
+    private fun toggleHomeLock() {
+        val on = !homeLockOn()
+        prefs.edit().putBoolean(HomeRedirectService.PREF, on).apply()
+        homeItem.text = homeLabel()
+        if (on && !serviceEnabled()) {
+            AlertDialog.Builder(this, android.R.style.Theme_DeviceDefault_Dialog_Alert)
+                .setTitle("Une autorisation, une seule fois")
+                .setMessage("Pour que le bouton Accueil ramène sur Drivors TV, active « Drivors TV – bouton Accueil » dans l'écran qui va s'ouvrir (Accessibilité).\n\nSi l'option est grisée : Paramètres › Applications › Drivors TV › Autoriser les paramètres restreints, puis recommence.")
+                .setPositiveButton("Ouvrir") { _, _ -> openSettings(Settings.ACTION_ACCESSIBILITY_SETTINGS) }
+                .setNegativeButton("Plus tard", null)
+                .show()
+        } else {
+            toast(if (on) "Le bouton Accueil ramène maintenant sur Drivors TV" else "Le bouton Accueil ramène de nouveau sur Google TV")
+        }
     }
 
     // ---------------------------------------------------------------- mise à jour
@@ -1328,6 +1436,7 @@ class MainActivity : Activity() {
         const val TAB_NEWS = 2
         const val TAB_APPS = 3
         const val NEWS_EVERY = 20 * 60_000L
+        const val CRUNCHYROLL = "com.crunchyroll.crunchyroid"
     }
 }
 

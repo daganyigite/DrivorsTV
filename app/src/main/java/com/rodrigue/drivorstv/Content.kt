@@ -49,7 +49,8 @@ object Content {
         "Paramount+" to listOf("com.cbs.ott"),
         "Hulu" to listOf("com.hulu.livingroomplus"),
         "Peacock" to listOf("com.peacocktv.peacockandroid"),
-        "Canal+" to listOf("com.canal.android.canal")
+        "Canal+" to listOf("com.canal.android.canal"),
+        "Crunchyroll" to listOf("com.crunchyroll.crunchyroid")
     )
 
     /** Nom de plateforme TMDB -> nom affiché. */
@@ -61,6 +62,7 @@ object Content {
             "disney" in n -> "Disney+"
             "apple tv" in n -> "Apple TV+"
             "canal" in n -> "Canal+"
+            "crunchyroll" in n -> "Crunchyroll"
             n == "max" || "hbo" in n -> "HBO Max"
             "paramount" in n -> "Paramount+"
             else -> null
@@ -145,6 +147,32 @@ object Content {
         val picks = (withBack.filter { it.platform.isNotEmpty() }.distinctBy { it.platform } + withBack)
             .distinct().take(6)
         return picks + (all - picks.toSet())
+    }
+
+    /** Les séries les plus populaires d'une plateforme (ex. Crunchyroll = 283), en français. */
+    fun loadProvider(key: String, providerId: Int, platform: String): List<Show> {
+        if (key.isBlank()) return emptyList()
+        val k = key.trim()
+        val bearer = k.length > 40
+        val base = "https://api.themoviedb.org/3/discover/tv?language=fr-FR&sort_by=popularity.desc" +
+            "&with_watch_providers=$providerId&watch_region=FR"
+        val url = base + if (bearer) "" else "&api_key=$k"
+        val h = if (bearer) mapOf("Authorization" to "Bearer $k") else emptyMap()
+        val res = JSONObject(String(Net.get(url, headers = h))).optJSONArray("results") ?: return emptyList()
+        val out = mutableListOf<Show>()
+        for (i in 0 until res.length()) {
+            val r = res.getJSONObject(i)
+            val back = r.optString("backdrop_path").takeIf { it.startsWith("/") } ?: continue
+            out += Show(
+                id = r.optInt("id"), name = r.optString("name"), platform = platform,
+                poster = r.optString("poster_path").takeIf { it.startsWith("/") }?.let { "https://image.tmdb.org/t/p/w342$it" },
+                genres = emptyList(), summary = r.optString("overview"),
+                weight = r.optDouble("popularity", 0.0).toInt(),
+                backdrop = "https://image.tmdb.org/t/p/w780$back",
+                kind = "Série", year = r.optString("first_air_date").take(4), tmdbType = "tv"
+            )
+        }
+        return out
     }
 
     // ------------------------------------------------------------ TVmaze (secours, en anglais)
