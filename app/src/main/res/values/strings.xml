@@ -1,4 +1,6 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
     <string name="app_name">Drivors TV</string>
+    <string name="home_service_label">Drivors TV – bouton Accueil</string>
+    <string name="home_service_desc">Ramène le bouton Accueil de la télécommande sur Drivors TV au lieu de l\'accueil Google TV. Ne lit aucun contenu de l\'écran. Se désactive dans Drivors TV › Réglages rapides.</string>
 </resources>
